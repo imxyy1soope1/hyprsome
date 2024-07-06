@@ -1,28 +1,40 @@
+use std::path::Path;
+use std::ffi::OsString;
 use clap::{Parser, Subcommand, ValueEnum};
+use xdg::BaseDirectories;
+use anyhow::{anyhow, Result};
+use once_cell::sync::Lazy;
 
+mod config;
 mod hyprland_ipc;
+
+use config::Config;
 use hyprland::{
     data::{Client, Monitor, Transforms},
     dispatch::Direction,
 };
 use hyprland_ipc::{client, monitor, option, workspace};
 
-#[derive(Parser)]
+pub(crate) static DEFAULT_CONFIG_PATH: Lazy<OsString> = Lazy::new(|| BaseDirectories::new().unwrap().get_config_file(Path::new("hyprsome/config.toml")).into_os_string());
+
+#[derive(Parser, Clone)]
 #[command(name = "hyprsome")]
 #[command(author = "sopa0")]
 #[command(version = "0.1.12")]
 #[command(about = "Makes hyprland workspaces behave like awesome", long_about = None)]
 struct Cli {
+    #[arg(short, long, default_value = DEFAULT_CONFIG_PATH.as_os_str())]
+    config: String,
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone, Copy)]
 enum Commands {
     Focus { direction: Directions },
-    Workspace { workspace_number: u64 },
-    Move { workspace_number: u64 },
-    Movefocus { workspace_number: u64 },
+    Workspace { workspace_number: i32 },
+    Move { workspace_number: i32 },
+    Movefocus { workspace_number: i32 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -66,53 +78,28 @@ impl MonitorDimensions for Monitor {
     }
 }
 
+pub fn get_monitor_workspace(config: &Config, monitor: Monitor, workspace_number: i32) -> i32 {
+    let id: i32 = config.monitors.iter().position(|name| name == &monitor.name).unwrap().try_into().unwrap();
+    id * 10 + workspace_number
+}
+
 pub fn get_current_monitor() -> Monitor {
     monitor::get().iter().find(|m| m.focused).unwrap().clone()
 }
 
-//TODO: refactor this nonsense
-pub fn select_workspace(workspace_number: &u64) {
+pub fn select_workspace(config: &Config, workspace_number: i32) {
     let mon = get_current_monitor();
-    match mon.id {
-        0 => workspace::focus(workspace_number),
-        _ => {
-            workspace::focus(
-                &format!("{}{}", mon.id, workspace_number)
-                    .parse::<u64>()
-                    .unwrap(),
-            );
-        }
-    }
+    workspace::focus(get_monitor_workspace(config, mon, workspace_number))
 }
 
-//TODO: refactor this nonsense
-pub fn send_to_workspace(workspace_number: &u64) {
+pub fn send_to_workspace(config: &Config, workspace_number: i32) {
     let mon = get_current_monitor();
-    match mon.id {
-        0 => workspace::move_to(workspace_number),
-        _ => {
-            workspace::move_to(
-                &format!("{}{}", mon.id, workspace_number)
-                    .parse::<u64>()
-                    .unwrap(),
-            );
-        }
-    }
+    workspace::move_to(get_monitor_workspace(config, mon, workspace_number))
 }
 
-//TODO: refactor this nonsense
-pub fn movefocus(workspace_number: &u64) {
+pub fn movefocus(config: &Config, workspace_number: i32) {
     let mon = get_current_monitor();
-    match mon.id {
-        0 => workspace::move_focus(workspace_number),
-        _ => {
-            workspace::move_focus(
-                &format!("{}{}", mon.id, workspace_number)
-                    .parse::<u64>()
-                    .unwrap(),
-            );
-        }
-    }
+    workspace::move_focus(get_monitor_workspace(config, mon, workspace_number))
 }
 
 pub fn get_leftmost_client_for_monitor(mon_id: i128) -> Client {
@@ -270,9 +257,10 @@ pub fn is_bottom_monitor(mon: &Monitor) -> bool {
     false
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
-    match &cli.command {
+    let config = Config::parse(&std::fs::read_to_string(Path::new(&cli.config)).map_err(|err| anyhow!("Failed to read config file: {err}"))?)?;
+    match cli.command {
         Commands::Focus { direction } => match direction {
             Directions::L => {
                 let aw = client::get_active();
@@ -308,13 +296,14 @@ fn main() {
             }
         },
         Commands::Workspace { workspace_number } => {
-            select_workspace(workspace_number);
+            select_workspace(&config, workspace_number);
         }
         Commands::Move { workspace_number } => {
-            send_to_workspace(workspace_number);
+            send_to_workspace(&config, workspace_number);
         }
         Commands::Movefocus { workspace_number } => {
-            movefocus(workspace_number);
+            movefocus(&config, workspace_number);
         }
     }
+    Ok(())
 }
