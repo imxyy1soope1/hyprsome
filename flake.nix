@@ -6,10 +6,10 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { crane, flake-utils, ... }:
+  outputs = { nixpkgs, crane, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        craneLib = crane.lib.${system};
+        craneLib = crane.mkLib nixpkgs.legacyPackages.${system};
       in
     {
       packages.default = craneLib.buildPackage {
