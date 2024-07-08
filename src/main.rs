@@ -1,9 +1,7 @@
 use std::path::Path;
-use std::ffi::OsString;
 use clap::{Parser, Subcommand, ValueEnum};
 use xdg::BaseDirectories;
 use anyhow::{anyhow, Result};
-use once_cell::sync::Lazy;
 
 mod config;
 mod hyprland_ipc;
@@ -15,15 +13,13 @@ use hyprland::{
 };
 use hyprland_ipc::{client, monitor, option, workspace};
 
-pub(crate) static DEFAULT_CONFIG_PATH: Lazy<OsString> = Lazy::new(|| BaseDirectories::new().unwrap().get_config_file(Path::new("hyprsome/config.toml")).into_os_string());
-
 #[derive(Parser, Clone)]
 #[command(name = "hyprsome")]
 #[command(author = "sopa0")]
 #[command(version = "0.1.12")]
 #[command(about = "Makes hyprland workspaces behave like awesome", long_about = None)]
 struct Cli {
-    #[arg(short, long, default_value = DEFAULT_CONFIG_PATH.as_os_str())]
+    #[arg(short, long, default_value = "")]
     config: String,
     #[command(subcommand)]
     command: Commands,
@@ -78,28 +74,31 @@ impl MonitorDimensions for Monitor {
     }
 }
 
-pub fn get_monitor_workspace(config: &Config, monitor: Monitor, workspace_number: i32) -> i32 {
-    let id: i32 = config.monitors.iter().position(|name| name == &monitor.name).unwrap().try_into().unwrap();
-    id * 10 + workspace_number
+pub fn get_monitor_workspace(config: &Config, monitor: Monitor, workspace_number: i32) -> Result<i32> {
+    let id: i32 = config.monitors.iter().position(|name| name == &monitor.name).ok_or(anyhow!("monitor not in config!"))?.try_into()?;
+    Ok(id * 10 + workspace_number)
 }
 
 pub fn get_current_monitor() -> Monitor {
     monitor::get().iter().find(|m| m.focused).unwrap().clone()
 }
 
-pub fn select_workspace(config: &Config, workspace_number: i32) {
+pub fn select_workspace(config: &Config, workspace_number: i32) -> Result<()> {
     let mon = get_current_monitor();
-    workspace::focus(get_monitor_workspace(config, mon, workspace_number))
+    workspace::focus(get_monitor_workspace(config, mon, workspace_number)?);
+    Ok(())
 }
 
-pub fn send_to_workspace(config: &Config, workspace_number: i32) {
+pub fn send_to_workspace(config: &Config, workspace_number: i32) -> Result<()> {
     let mon = get_current_monitor();
-    workspace::move_to(get_monitor_workspace(config, mon, workspace_number))
+    workspace::move_to(get_monitor_workspace(config, mon, workspace_number)?);
+    Ok(())
 }
 
-pub fn movefocus(config: &Config, workspace_number: i32) {
+pub fn movefocus(config: &Config, workspace_number: i32) -> Result<()> {
     let mon = get_current_monitor();
-    workspace::move_focus(get_monitor_workspace(config, mon, workspace_number))
+    workspace::move_focus(get_monitor_workspace(config, mon, workspace_number)?);
+    Ok(())
 }
 
 pub fn get_leftmost_client_for_monitor(mon_id: i128) -> Client {
@@ -259,7 +258,11 @@ pub fn is_bottom_monitor(mon: &Monitor) -> bool {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config = Config::parse(&std::fs::read_to_string(Path::new(&cli.config)).map_err(|err| anyhow!("Failed to read config file: {err}"))?)?;
+    let config = if cli.config.is_empty() {
+        Config::parse(&std::fs::read_to_string(Path::new(&BaseDirectories::new()?.get_config_file(Path::new("hyprsome/config.toml")).into_os_string()))?)
+    } else {
+        Config::parse(&std::fs::read_to_string(Path::new(&cli.config))?)
+    }?;
     match cli.command {
         Commands::Focus { direction } => match direction {
             Directions::L => {
@@ -296,13 +299,13 @@ fn main() -> Result<()> {
             }
         },
         Commands::Workspace { workspace_number } => {
-            select_workspace(&config, workspace_number);
+            select_workspace(&config, workspace_number)?;
         }
         Commands::Move { workspace_number } => {
-            send_to_workspace(&config, workspace_number);
+            send_to_workspace(&config, workspace_number)?;
         }
         Commands::Movefocus { workspace_number } => {
-            movefocus(&config, workspace_number);
+            movefocus(&config, workspace_number)?;
         }
     }
     Ok(())
